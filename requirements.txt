@@ -1,4 +1,6 @@
 streamlit
 pandas
 selenium
+
 webdriver-manager
+chromium-chromedriver

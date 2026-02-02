@@ -3,9 +3,11 @@ import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By  # これを追加
 import re
 import time
+
+
 
 # --- あなたの「お宝リスト」完全網羅 ---
 MASTER_LIST = {
@@ -19,24 +21,17 @@ MASTER_LIST = {
 }
 
 PLACE_MAP = {'05': '東京', '06': '中山', '08': '京都', '09': '阪神', '03': '福島', '04': '新潟', '10': '小倉'}
-
+# --- get_driver関数をさらにシンプルに ---
 def get_driver():
     options = Options()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
+    # サーバー環境でのクラッシュを防ぐ追加設定
+    options.add_argument('--remote-debugging-port=9222') 
     
-    # パスを直接指定せず、OSがインストールした場所を自動で使う設定
-    service = Service() 
-    
-    try:
-        return webdriver.Chrome(service=service, options=options)
-    except Exception as e:
-        # 万が一失敗した時のために、古いパスも試す予備ロジック
-        options.binary_location = "/usr/bin/chromium"
-        service = Service("/usr/bin/chromedriver")
-        return webdriver.Chrome(service=service, options=options)
+    return webdriver.Chrome(options=options)
 
 st.set_page_config(page_title="お宝馬アラート", page_icon="🏇")
 st.title("🏇 心理の歪み・お宝馬サーチ")

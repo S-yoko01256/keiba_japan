@@ -25,7 +25,18 @@ def get_driver():
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    options.add_argument('--disable-gpu')
+    
+    # パスを直接指定せず、OSがインストールした場所を自動で使う設定
+    service = Service() 
+    
+    try:
+        return webdriver.Chrome(service=service, options=options)
+    except Exception as e:
+        # 万が一失敗した時のために、古いパスも試す予備ロジック
+        options.binary_location = "/usr/bin/chromium"
+        service = Service("/usr/bin/chromedriver")
+        return webdriver.Chrome(service=service, options=options)
 
 st.set_page_config(page_title="お宝馬アラート", page_icon="🏇")
 st.title("🏇 心理の歪み・お宝馬サーチ")

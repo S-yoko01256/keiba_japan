@@ -34,11 +34,11 @@ def get_driver():
     # 事実：環境内のChromiumパスを固定
     options.binary_location = "/usr/bin/chromium"
     
-    # タイムアウト対策
+    # 高速化とタイムアウト対策
     options.add_experimental_option("prefs", {"profile.managed_default_content_settings.images": 2})
     options.page_load_strategy = 'eager'
     
-    # Chromium 144系に合致するドライバを強制同期
+    # Chromium 144系に合致するドライバを強制インストール
     from selenium.webdriver.chrome.service import Service as ChromeService
     service = ChromeService(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
     
@@ -46,7 +46,7 @@ def get_driver():
     driver.set_page_load_timeout(60)
     return driver  
 
-st.title("🏇 逃げ馬スキャナー（馬名位置修正版）")
+st.title("🏇 逃げ馬スキャナー（画像解析反映版）")
 
 target_date = st.date_input("開催日を選択", value=pd.to_datetime("2026-02-07"))
 
@@ -100,22 +100,35 @@ if st.button("スキャン開始"):
                         
                         for row_el in rows:
                             text = row_el.text
-                            # 人気の抽出
+                            # 1. 人気の抽出（画像の下部にある「(9人気)」に対応）
                             n_match = re.search(r'\((\d+)人気\)', text)
                             if n_match:
                                 cur_ninki = float(n_match.group(1))
                                 if cur_ninki in target_ninkis:
-                                    # 通過順の抽出
+                                    # 2. 前走通過順の抽出（逃げ判定）
                                     pass_matches = re.findall(r'(\d{1,2}-\d{1,2})', text)
                                     
                                     if pass_matches and pass_matches[0].startswith("1-"):
-                                        lines = text.split('\n')
-                                        # 【修正の事実】ダンプに基づき、本馬名は2番目の要素(index 1)
-                                        # 例: [0]1 1, [1]アヴァランチB, [2]マジェスティックウォリアー...
-                                        raw_name = lines[1] if len(lines) > 1 else "不明"
-                                        # 馬名の後の「B」などを取り除く（1文字以上のカタカナを抽出）
-                                        h_name_match = re.match(r'^[ァ-ヶー・]+', raw_name)
-                                        h_name = h_name_match.group(0) if h_name_match else raw_name
+                                        # 【修正の事実：画像配置に基づき馬名を特定】
+                                        lines = [l.strip() for l in text.split('\n') if l.strip()]
+                                        
+                                        # 画像では 1 1 の次に父馬、その次に「アヴァランチ」が来る
+                                        # 通常、2番目か3番目のカタカナ行が本馬名
+                                        h_name = "不明"
+                                        katakana_count = 0
+                                        for line in lines:
+                                            # カタカナ主体かつ、枠番（数字）ではない行を探す
+                                            if re.search(r'[ァ-ヶ]{2,}', line) and not re.match(r'^\d', line):
+                                                katakana_count += 1
+                                                # 2番目に見つかるカタカナ行が本馬名（画像上のアヴァランチの位置）
+                                                if katakana_count == 2:
+                                                    # Ⓑ などの記号を除去
+                                                    h_name = re.sub(r'[^ァ-ヶー・]', '', line)
+                                                    break
+                                        
+                                        # 万が一2番目で見つからない場合のバックアップ
+                                        if h_name == "不明" and len(lines) > 2:
+                                            h_name = re.sub(r'[^ァ-ヶー・]', '', lines[2])
 
                                         results.append({
                                             'レース': f"{queue['name']}{r}R",

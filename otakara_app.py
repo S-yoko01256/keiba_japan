@@ -9,6 +9,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 import re
 import time
+import os
 
 # --- 判定ロジック：回収率85%以上の条件リスト ---
 MASTER_LIST = {
@@ -29,94 +30,109 @@ def get_driver():
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
-    # Streamlit Cloud環境での動作を安定させる設定
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=options)
 
+# --- データベースから本日のレースID候補を生成する関数 ---
+def get_race_ids_from_db(target_dt):
+    year = target_dt.strftime('%Y')
+    month = target_dt.strftime('%m')
+    day = target_dt.strftime('%d')
+    csv_file = f"jra_schedule_{year}.csv"
+    
+    if not os.path.exists(csv_file):
+        return None # CSVがない場合は従来モードへ
+    
+    df = pd.read_csv(csv_file, dtype=str)
+    # 当日の開催を抽出
+    today_race = df[(df['月'] == month) & (df['日'] == day)]
+    
+    if today_race.empty:
+        return [] # 開催なし
+    
+    race_ids = []
+    for _, row in today_race.iterrows():
+        # netkeiba形式のレースID (2026 + 場所05 + 回01 + 日03 + レース01〜12)
+        base_id = f"{year}{row['場所コード']}{row['回']}{row['日次']}"
+        for r in range(1, 13):
+            race_ids.append(f"{base_id}{str(r).zfill(2)}")
+    return race_ids
+
 st.set_page_config(page_title="お宝馬アラート", page_icon="🏇")
 st.title("🏇 心理の歪み・お宝馬サーチ")
-st.caption("35年統計：特定の不人気×逃げ実績馬をリアルタイム検知")
+st.caption("データベース活用版：高速スキャン対応")
 
-# 日付選択（デフォルトは実行日の日付）
 target_date_dt = st.date_input("実行日を選択", pd.to_datetime("today"))
-target_date = target_date_dt.strftime('%Y%m%d')
+target_date_str = target_date_dt.strftime('%Y%m%d')
 
 if st.button("全会場スキャン開始"):
-    driver = get_driver()
-    wait = WebDriverWait(driver, 15)
-    found_any = False
-    
-    with st.spinner("今日の開催レースを確認中..."):
-        # 1. 開催一覧ページを開いてレースIDを自動取得（高速化修正）
-        top_url = f"https://race.netkeiba.com/top/race_list.html?kasai_date={target_date}"
-        driver.get(top_url)
-        time.sleep(2) # 読み込み待ち
-
-        links = driver.find_elements(By.TAG_NAME, "a")
-        race_ids = []
-        for link in links:
-            href = link.get_attribute("href")
-            if href and "race_id=" in href:
-                match = re.search(r'race_id=(\d{12})', href)
-                if match:
-                    race_ids.append(match.group(1))
+    # 1. まずはデータベース（CSV）を確認
+    with st.spinner("開催スケジュールを確認中..."):
+        race_ids = get_race_ids_from_db(target_date_dt)
         
-        # 重複を排除して昇順に並べ替え
-        race_ids = sorted(list(set(race_ids)))
-
-        if not race_ids:
-            st.warning(f"{target_date} の開催レースが見つかりませんでした。日付を確認してください。")
+        # CSVがない場合はブラウザを立ち上げて従来通り取りに行く
+        if race_ids is None:
+            st.info("年間表がないため、ネットから開催情報を取得します...")
+            driver = get_driver()
+            driver.get(f"https://race.netkeiba.com/top/race_list.html?kasai_date={target_date_str}")
+            time.sleep(2)
+            links = driver.find_elements(By.TAG_NAME, "a")
+            race_ids = []
+            for link in links:
+                href = link.get_attribute("href")
+                if href and "race_id=" in href:
+                    match = re.search(r'race_id=(\d{12})', href)
+                    if match: race_ids.append(match.group(1))
+            race_ids = sorted(list(set(race_ids)))
+            if not race_ids:
+                driver.quit()
         else:
-            st.info(f"🔍 {len(race_ids)}件のレースを検知しました。順番にスキャンします。")
+            driver = get_driver() # CSVからIDが作れた場合もブラウザは必要
+
+    # 2. スキャン実行
+    if not race_ids:
+        st.warning(f"{target_date_str} は開催日ではないか、データが見つかりませんでした。")
+    else:
+        st.info(f"🔍 {len(race_ids)}件のレースを検知。データベース照合で開始します。")
+        found_any = False
+        wait = WebDriverWait(driver, 15)
+        
+        progress_bar = st.progress(0)
+        for i, rid in enumerate(race_ids):
+            p_code = rid[4:6]
+            p_name = PLACE_MAP.get(p_code)
+            if not p_name: continue
             
-            # 2. 抽出したレースIDを巡回
-            for rid in race_ids:
-                p_code = rid[4:6]  # 競馬場コード
-                p_name = PLACE_MAP.get(p_code)
-                
-                if not p_name: continue # リスト外の競馬場（地方など）はスキップ
-                
-                r_num = int(rid[10:12]) # レース番号
-
-                driver.get(f"https://race.netkeiba.com/race/shutuba.html?race_id={rid}")
-                
-                try:
-                    # 出馬表の読み込みを待機
-                    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "HorseList")))
-                    
-                    # 芝・ダートの判定
-                    race_data = driver.find_element(By.CLASS_NAME, "RaceData01").text
-                    track = "芝" if "芝" in race_data else "ダート"
-                    
-                    # 条件に合致する競馬場・トラックか確認
-                    if p_name in MASTER_LIST and track in MASTER_LIST[p_name]:
-                        target_ninkis = MASTER_LIST[p_name][track]
-                        rows = driver.find_elements(By.CLASS_NAME, "HorseList")
-                        
-                        for row in rows:
-                            try:
-                                # 人気順を取得
-                                ninki_text = row.find_element(By.CLASS_NAME, "Ninki").text
-                                if not ninki_text or ninki_text == " ": continue
-                                
-                                ninki = float(ninki_text)
-                                
-                                # 統計上の人気条件に合致するか
-                                if ninki in target_ninkis:
-                                    name = row.find_element(By.CLASS_NAME, "HorseName").text
-                                    
-                                    # 逃げ・先行実績の判定（近走のどこかで3番手以内）
-                                    if re.search(r'[1-3]-\d+-\d+', row.text):
-                                        st.success(f"🔥 【お宝発見】{p_name}{r_num}R ({track}) {name} - {ninki}人気")
-                                        found_any = True
-                            except:
-                                continue
-                except Exception as e:
-                    # レース詳細の読み込み失敗時は次へ
+            r_num = int(rid[10:12])
+            driver.get(f"https://race.netkeiba.com/race/shutuba.html?race_id={rid}")
+            
+            try:
+                # ページの存在確認（CSVにあるが中止などの場合を考慮）
+                if "一致する情報は見つかりませんでした" in driver.page_source:
                     continue
+                
+                wait.until(EC.presence_of_element_located((By.CLASS_NAME, "HorseList")))
+                race_data = driver.find_element(By.CLASS_NAME, "RaceData01").text
+                track = "芝" if "芝" in race_data else "ダート"
+                
+                if p_name in MASTER_LIST and track in MASTER_LIST[p_name]:
+                    target_ninkis = MASTER_LIST[p_name][track]
+                    rows = driver.find_elements(By.CLASS_NAME, "HorseList")
+                    for row in rows:
+                        try:
+                            ninki_text = row.find_element(By.CLASS_NAME, "Ninki").text
+                            if not ninki_text or ninki_text == " ": continue
+                            ninki = float(ninki_text)
+                            if ninki in target_ninkis:
+                                name = row.find_element(By.CLASS_NAME, "HorseName").text
+                                if re.search(r'[1-3]-\d+-\d+', row.text):
+                                    st.success(f"🔥 【お宝】{p_name}{r_num}R ({track}) {name} {ninki}人気")
+                                    found_any = True
+                        except: continue
+            except: continue
+            progress_bar.progress((i + 1) / len(race_ids))
 
-    if not found_any:
-        st.warning("本日の条件に合致する馬は見つかりませんでした。")
-    
-    st.write("スキャン完了しました。")
-    driver.quit()
+        if not found_any:
+            st.warning("本日の条件に合致する馬は見つかりませんでした。")
+        driver.quit()
+        st.write("スキャン完了。")

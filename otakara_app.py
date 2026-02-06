@@ -24,16 +24,15 @@ PLACE_MAP = {
     '06': '中山', '07': '中京', '08': '京都', '09': '阪神', '10': '小倉'
 }
 
+   
 def get_driver():
     options = Options()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     
-    # 【事実に基づく高速化】画像を読み込まない（タイムアウト対策の核心）
+    # 事実：タイムアウトを防ぐための高速化設定
     options.add_experimental_option("prefs", {"profile.managed_default_content_settings.images": 2})
-    
-    # 【事実に基づく高速化】HTML（文字）が届いたら解析を開始する
     options.page_load_strategy = 'eager'
     
     # 修正の事実：DriverManagerに「今動いているChrome」のバージョンを自動判定させる
@@ -44,10 +43,8 @@ def get_driver():
     driver = webdriver.Chrome(service=service, options=options)
     
     driver.set_page_load_timeout(60)
-    return driver    
-    # ページ読み込みのタイムアウトを60秒に設定
-    driver.set_page_load_timeout(60)
-    return driver
+    return driver  
+
 
 st.title("🏇 逃げ馬スキャナー（最速・事実判定版）")
 

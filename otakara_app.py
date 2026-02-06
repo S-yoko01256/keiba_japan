@@ -5,6 +5,8 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 import re
 import time
 
@@ -16,8 +18,7 @@ MASTER_LIST = {
     '東京': {'ダート': [7.0]},
     '福島': {'ダート': [3.0]},
     '小倉': {'芝': [8.0]},
-    '新潟': {'芝': [5.0]}
-}
+    '新潟': {'芝': [5.0]},
 }
 
 PLACE_MAP = {'05': '東京', '06': '中山', '08': '京都', '09': '阪神', '03': '福島', '04': '新潟', '10': '小倉'}
@@ -29,7 +30,7 @@ def get_driver():
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--remote-debugging-port=9222') 
-    return webdriver.Chrome(options=options)
+    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
 st.set_page_config(page_title="お宝馬アラート", page_icon="🏇")
 st.title("🏇 心理の歪み・お宝馬サーチ")

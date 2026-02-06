@@ -28,12 +28,19 @@ def get_driver():
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    
+    # バージョン不整合エラー対策：バイナリパスを明示的に指定
+    options.binary_location = "/usr/bin/chromium"
+    
+    # 実行環境の最新ブラウザに合わせてドライバーを自動更新してインストール
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=options)
 
 # --- Streamlit UI ---
 st.title("🔥 逃げ馬「お宝」最速スキャナー")
 st.write("設定された競馬場と人気条件に合致する馬だけを狙い撃ちします。")
 
+# 2026年のスケジュールCSVを参照
 target_date = st.date_input("開催日を選択してください", value=pd.to_datetime("2026-02-07"))
 
 if st.button("スキャン開始"):
@@ -49,6 +56,7 @@ if st.button("スキャン開始"):
             target_queues = []
             for _, row in day_races.iterrows():
                 p_name = PLACE_MAP.get(str(row['場所コード']).zfill(2), "不明")
+                # CSVの場所が MASTER_LIST に含まれる場合のみリストに追加
                 if p_name in MASTER_LIST:
                     p_code = str(row['場所コード']).zfill(2)
                     kai = str(row['回']).zfill(2)
@@ -74,22 +82,23 @@ if st.button("スキャン開始"):
                         url = f"https://race.netkeiba.com/race/shutuba.aspx?race_id={r_id}"
                         
                         driver.get(url)
-                        time.sleep(1) # 最低限の待機
+                        time.sleep(1) 
                         
                         # 芝・ダートの判定
                         race_header = driver.find_element("tag name", "body").text.split('\n')[0]
                         track = "芝" if "芝" in race_header else "ダート" if "ダート" in race_header else None
                         
-                        # その競馬場のそのコース（芝/ダ）に条件がある場合のみ解析
+                        # コース条件がリストに存在する場合のみ詳細解析
                         if track and track in MASTER_LIST[queue['name']]:
                             target_ninkis = MASTER_LIST[queue['name']][track]
                             rows = driver.find_elements("class name", "HorseList")
                             
                             for row_el in rows:
                                 row_text = row_el.text
+                                # 人気の抜き出し判定
                                 ninki_match = re.search(r'(\d+)\n人気', row_text)
                                 if ninki_match and float(ninki_match.group(1)) in target_ninkis:
-                                    # 「前走1番手（逃げ）」の判定
+                                    # 「前走1番手（逃げ）」の判定（正規表現）
                                     if re.search(r'1-\d+-\d+', row_text):
                                         horse_name = row_text.split('\n')[2]
                                         results.append({
@@ -116,4 +125,4 @@ if st.button("スキャン開始"):
                     for log in debug_logs: st.write(log)
 
     except Exception as e:
-        st.error(f"エラー: {e}")
+        st.error(f"エラーが発生しました: {e}")

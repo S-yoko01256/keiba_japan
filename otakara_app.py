@@ -36,9 +36,15 @@ def get_driver():
     # 【事実に基づく高速化】HTML（文字）が届いたら解析を開始する
     options.page_load_strategy = 'eager'
     
-    service = Service(ChromeDriverManager().install())
+    # 修正の事実：DriverManagerに「今動いているChrome」のバージョンを自動判定させる
+    from selenium.webdriver.chrome.service import Service as ChromeService
+    from webdriver_manager.chrome import ChromeDriverManager
+    
+    service = ChromeService(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
     
+    driver.set_page_load_timeout(60)
+    return driver    
     # ページ読み込みのタイムアウトを60秒に設定
     driver.set_page_load_timeout(60)
     return driver

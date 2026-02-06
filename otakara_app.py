@@ -3,11 +3,11 @@ import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 import time
 import re
+import os
 
-# --- 1. 設定：MASTER_LIST（分析データに基づく「儲かる」条件） ---
+# --- 1. 設定：MASTER_LIST ---
 MASTER_LIST = {
     '阪神': {'ダート': [11.0, 8.0, 9.0, 6.0], '芝': [9.0, 5.0, 6.0, 7.0]},
     '中山': {'ダート': [8.0], '芝': [5.0, 8.0]},
@@ -28,31 +28,36 @@ def get_driver():
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
     
-    # 【エラー対策】ブラウザの実行パスを明示的に指定
+    # 【最強のエラー対策】
+    # 自動更新ツールを使わず、システム標準のパスを直接指定します
     options.binary_location = "/usr/bin/chromium"
     
-    # ドライバーを最新のブラウザバージョンに合わせて自動インストール
-    service = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(service=service, options=options)
+    # 多くの環境で標準的に配置されているchromedriverのパスを直接指定
+    # もしこれでダメな場合は、Service() の引数を空にするか修正します
+    chrome_service = Service("/usr/bin/chromedriver")
+    
+    try:
+        return webdriver.Chrome(service=chrome_service, options=options)
+    except:
+        # 上記で失敗した場合、パス指定なしでシステムのパス設定(PATH)に任せる
+        return webdriver.Chrome(options=options)
 
 # --- Streamlit UI ---
 st.title("🔥 逃げ馬「お宝」最速スキャナー")
-st.write("設定された競馬場と人気条件に合致する馬だけを狙い撃ちします。")
+st.write("ブラウザバージョン不整合を回避する特別設定版です。")
 
-# 日付選択
 target_date = st.date_input("開催日を選択してください", value=pd.to_datetime("2026-02-07"))
 
 if st.button("スキャン開始"):
     try:
-        # 1. スケジュールの読み込み
         df_schedule = pd.read_csv("jra_schedule_2026.csv")
         day_races = df_schedule[(df_schedule['月'] == target_date.month) & (df_schedule['日'] == target_date.day)]
         
         if day_races.empty:
             st.warning("指定日の開催データがありません。")
         else:
-            # 2. ロジック対象の場所だけを抽出してURLを生成（中京などはここで除外）
             target_queues = []
             for _, row in day_races.iterrows():
                 p_name = PLACE_MAP.get(str(row['場所コード']).zfill(2), "不明")
@@ -63,13 +68,11 @@ if st.button("スキャン開始"):
                     target_queues.append({'name': p_name, 'base_id': f"2026{p_code}{kai}{nichiji}"})
             
             if not target_queues:
-                st.info("本日の開催にロジック対象の競馬場（阪神・中山等）はありません。")
+                st.info("本日の開催に対象の競馬場はありません。")
             else:
                 driver = get_driver()
                 results = []
-                debug_logs = []
                 
-                # 全レース数計算
                 total_races = len(target_queues) * 12
                 progress_bar = st.progress(0)
                 current_count = 0
@@ -81,25 +84,22 @@ if st.button("スキャン開始"):
                         url = f"https://race.netkeiba.com/race/shutuba.aspx?race_id={r_id}"
                         
                         driver.get(url)
-                        time.sleep(1) # 負荷軽減のための待機
+                        time.sleep(1)
                         
-                        # 芝・ダートの判定（ヘッダーから取得）
                         race_header = driver.find_element("tag name", "body").text.split('\n')[0]
                         track = "芝" if "芝" in race_header else "ダート" if "ダート" in race_header else None
                         
-                        # そのコース条件がMASTER_LISTにある場合のみ解析
                         if track and track in MASTER_LIST[queue['name']]:
                             target_ninkis = MASTER_LIST[queue['name']][track]
                             rows = driver.find_elements("class name", "HorseList")
                             
                             for row_el in rows:
-                                row_text = row_el.text
-                                # 人気の抜き出し判定
-                                ninki_match = re.search(r'(\d+)\n人気', row_text)
+                                text = row_el.text
+                                ninki_match = re.search(r'(\d+)\n人気', text)
                                 if ninki_match and float(ninki_match.group(1)) in target_ninkis:
-                                    # 「前走1番手（逃げ）」の判定
-                                    if re.search(r'1-\d+-\d+', row_text):
-                                        horse_name = row_text.split('\n')[2]
+                                    # 逃げ判定（1コーナー先頭）
+                                    if re.search(r'1-\d+-\d+', text):
+                                        horse_name = text.split('\n')[2]
                                         results.append({
                                             'レース': f"{queue['name']}{r}R",
                                             '馬名': horse_name,
@@ -107,21 +107,16 @@ if st.button("スキャン開始"):
                                             '区分': track,
                                             'リンク': url
                                         })
-                                        debug_logs.append(f"✅ {queue['name']}{r}R: {horse_name} 発見")
 
                         progress_bar.progress(current_count / total_races)
                 
                 driver.quit()
 
-                # 4. 結果表示
                 if results:
-                    st.success(f"スキャン完了！ {len(results)}頭の候補が見つかりました。")
+                    st.success(f"発見！ {len(results)}頭の候補")
                     st.table(pd.DataFrame(results))
                 else:
-                    st.info("条件に合致する馬は見つかりませんでした。")
-
-                with st.expander("詳細ログ"):
-                    for log in debug_logs: st.write(log)
+                    st.info("条件に合う馬はいませんでした。")
 
     except Exception as e:
-        st.error(f"エラーが発生しました: {e}")
+        st.error(f"致命的なエラーが発生しました。環境設定を確認してください: {e}")

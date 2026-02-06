@@ -18,6 +18,7 @@ MASTER_LIST = {
     '小倉': {'芝': [8.0]},
     '新潟': {'芝': [5.0]}
 }
+}
 
 PLACE_MAP = {'05': '東京', '06': '中山', '08': '京都', '09': '阪神', '03': '福島', '04': '新潟', '10': '小倉'}
 
@@ -44,64 +45,68 @@ if st.button("全会場スキャン開始"):
     found_any = False
     
     with st.spinner("開催情報を確認中..."):
-        for p_id, p_name in PLACE_MAP.items():
-            # その競馬場で開催があるか、第1〜5回までを高速チェック
-            venue_active = False
-            for kai in range(1, 6):
-                # 各開催の「1日目」があるかだけを確認
-                check_id = f"{target_date}{p_id}{kai:02}0101"
-                driver.get(f"https://race.netkeiba.com/race/shutuba.html?race_id={check_id}")
-                
-                # ページソース内に「出馬表」があり、かつエラーメッセージがないことを確認
-                if "出馬表" in driver.title and "一致するレース" not in driver.page_source:
-                    venue_active = True
-                    current_kai = kai
-                    break
+        # 1. まず開催一覧ページを開く
+        top_url = f"https://race.netkeiba.com/top/race_list.html?kasai_date={target_date}"
+        driver.get(top_url)
+        time.sleep(1)
+
+        # 2. ページ内のすべての出馬表リンクを取得
+        links = driver.find_elements(By.TAG_NAME, "a")
+        race_ids = []
+        for link in links:
+            href = link.get_attribute("href")
+            if href and "race_id=" in href:
+                match = re.search(r'race_id=(\d{12})', href)
+                if match:
+                    race_ids.append(match.group(1))
+        
+        # 重複を削除してソート
+        race_ids = sorted(list(set(race_ids)))
+
+        if not race_ids:
+            st.warning("開催レースが見つかりませんでした。")
+        else:
+            st.write(f"🔍 {len(race_ids)}件のレースが見つかりました。スキャンを開始します...")
             
-            if not venue_active:
-                # 開催がなければこの競馬場はスキップ
-                continue
+            # 3. 存在するレースIDだけを巡回
+            for rid in race_ids:
+                # 競馬場コードを抽出 (race_idの5,6桁目)
+                p_code = rid[4:6]
+                p_name = PLACE_MAP.get(p_code)
+                
+                if not p_name: continue # 対象外の競馬場はスルー
+                
+                # レース番号抽出
+                r_num = int(rid[10:12])
 
-            # 開催がある場合のみ、日目（1〜12日目）を特定してスキャン
-            st.write(f"🔍 {p_name}競馬場の開催を検知。詳細スキャン中...")
-            for day in range(1, 13):
-                race_id_base = f"{target_date}{p_id}{current_kai:02}{day:02}"
-                # その日の1Rが存在するかチェック
-                driver.get(f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id_base}01")
-                if "出馬表" not in driver.title or "一致するレース" in driver.page_source:
-                    continue
-
-                for r in range(1, 13):
-                    rid = f"{race_id_base}{r:02}"
-                    driver.get(f"https://race.netkeiba.com/race/shutuba.html?race_id={rid}")
+                driver.get(f"https://race.netkeiba.com/race/shutuba.html?race_id={rid}")
+                
+                try:
+                    # 画面表示を待機
+                    wait.until(EC.presence_of_element_located((By.CLASS_NAME, "HorseList")))
                     
-                    try:
-                        # 画面表示を待機
-                        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "HorseList")))
+                    race_data = driver.find_element(By.CLASS_NAME, "RaceData01").text
+                    track = "芝" if "芝" in race_data else "ダート"
+                    
+                    if p_name in MASTER_LIST and track in MASTER_LIST[p_name]:
+                        target_ninkis = MASTER_LIST[p_name][track]
+                        rows = driver.find_elements(By.CLASS_NAME, "HorseList")
                         
-                        race_data = driver.find_element(By.CLASS_NAME, "RaceData01").text
-                        track = "芝" if "芝" in race_data else "ダート"
-                        
-                        if p_name in MASTER_LIST and track in MASTER_LIST[p_name]:
-                            target_ninkis = MASTER_LIST[p_name][track]
-                            rows = driver.find_elements(By.CLASS_NAME, "HorseList")
-                            
-                            for row in rows:
-                                try:
-                                    ninki_text = row.find_element(By.CLASS_NAME, "Ninki").text
-                                    if not ninki_text or ninki_text == " ": continue
-                                    
-                                    ninki = float(ninki_text)
-                                    if ninki in target_ninkis:
-                                        name = row.find_element(By.CLASS_NAME, "HorseName").text
-                                        if re.search(r'[1-3]-\d+-\d+', row.text):
-                                            st.success(f"🔥 【激アツ】{p_name}{r}R {track} {name} ({ninki}人気)")
-                                            found_any = True
-                                except:
-                                    continue
-                    except:
-                        continue
-            # その競馬場の処理が終わったら次の競馬場へ
+                        for row in rows:
+                            try:
+                                ninki_text = row.find_element(By.CLASS_NAME, "Ninki").text
+                                if not ninki_text or ninki_text == " ": continue
+                                
+                                ninki = float(ninki_text)
+                                if ninki in target_ninkis:
+                                    name = row.find_element(By.CLASS_NAME, "HorseName").text
+                                    if re.search(r'[1-3]-\d+-\d+', row.text):
+                                        st.success(f"🔥 【激アツ】{p_name}{r_num}R {track} {name} ({ninki}人気)")
+                                        found_any = True
+                            except:
+                                continue
+                except:
+                    continue
 
     if not found_any:
         st.warning("対象の日付に合致する『お宝馬』は見つかりませんでした。")

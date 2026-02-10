@@ -6,12 +6,7 @@ from selenium.webdriver.common.by import By
 import time
 import re
 
-# 会場名と場所コードの変換マップ（CSVの「場所名」と一致させる）
-VENUE_MAP = {
-    '札幌': '01', '函館': '02', '福島': '03', '新潟': '04', '東京': '05',
-    '中山': '06', '中京': '07', '京都': '08', '阪神': '09', '小倉': '10'
-}
-
+# 会場別アダプティブ条件（汚れ馬・馬体重ロジックはそのまま維持）
 ADAPTIVE_PARAMS = {
     '東京': {'weight': 480, 'pos': 1}, '新潟': {'weight': 480, 'pos': 1},
     '中京': {'weight': 480, 'pos': 1}, '中山': {'weight': 490, 'pos': 2},
@@ -28,7 +23,7 @@ def get_driver():
     return webdriver.Chrome(options=options)
 
 def scan_race(driver, race_id, venue_name):
-    """判定ロジック（汚れ馬・馬体重）はそのまま維持"""
+    """判定ロジックはユーザー修正版を完全継承"""
     url = f"https://race.netkeiba.com/race/shutuba_past.html?race_id={race_id}"
     driver.get(url)
     time.sleep(1) 
@@ -63,6 +58,7 @@ def scan_race(driver, race_id, venue_name):
                         if rank_val.isdigit():
                             ranks.append(int(rank_val))
                 
+                # 汚れ条件：前走or前々走が10着以下
                 dirt_flag = any(r >= 10 for r in ranks[:2])
                 weight_flag = current_weight >= params['weight']
                 
@@ -84,17 +80,16 @@ st.set_page_config(page_title="お宝馬一括スキャナー", layout="wide")
 st.title("🏇 2026年度版 全レース一括スキャナー")
 
 try:
-    # CSV読み込み
+    # 1. CSV読み込み
     df_schedule = pd.read_csv('jra_schedule_2026.csv')
     
-    # CSVの「月」と「日」を組み合わせて選択肢を作る
+    # 2. 日付選択肢の作成（月と日を使用）
     df_schedule['表示用日付'] = df_schedule['月'].astype(str) + "月" + df_schedule['日'].astype(str) + "日"
     available_dates = df_schedule['表示用日付'].unique()
-    
     selected_date_str = st.selectbox("スキャンする日を選択", available_dates)
 
     if st.button("全レーススキャン開始"):
-        # 選択された日のデータを抽出
+        # 選択された日の開催データを抽出
         today_venues = df_schedule[df_schedule['表示用日付'] == selected_date_str]
         
         results = []
@@ -105,19 +100,19 @@ try:
         try:
             total_venues = len(today_venues)
             for idx, row in today_venues.reset_index().iterrows():
-                v_name = row['場所名'] # CSVの列名「場所名」を使用
-                v_code = str(row['場所コード']).zfill(2) # CSVの「場所コード」を使用
-                
-                # レースIDの組み立て
-                # 年(2026) + 場所コード(2桁) + 回(2桁) + 日(2桁)
+                # CSV列名に基づいたデータ取得
+                v_name = row['場所']  
+                v_code = str(row['場所コード']).zfill(2) 
                 kai = str(row['回']).zfill(2)
-                nichiji = str(row['日']).zfill(2) # CSVの最後の「日」列（日次）を使用
+                nichiji = str(row['日次']).zfill(2) 
+                
+                # ID生成: 年(2026) + 場所(2桁) + 回(2桁) + 日次(2桁)
                 base_id = f"2026{v_code}{kai}{nichiji}"
                 
                 for r in range(1, 13):
                     r_str = str(r).zfill(2)
                     race_id = f"{base_id}{r_str}"
-                    status_text.text(f"スキャン中: {v_name} {r}R (ID: {race_id})")
+                    status_text.text(f"解析中: {v_name} {r}R ({race_id})")
                     
                     hits = scan_race(driver, race_id, v_name)
                     results.extend(hits)
@@ -135,4 +130,5 @@ try:
 
 except Exception as e:
     st.error(f"エラーが発生しました: {e}")
-    st.write("CSVの列名を確認してください:", df_schedule.columns.tolist() if 'df_schedule' in locals() else "読み込み失敗")
+    if 'df_schedule' in locals():
+        st.write("実際のCSV列名:", df_schedule.columns.tolist())

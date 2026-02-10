@@ -5,19 +5,20 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 import time
 import re
+from datetime import datetime
 
-# 1. シミュレーション結果に基づく会場別アダプティブ条件 
+# 会場名と場所コードの変換マップ
+VENUE_MAP = {
+    '札幌': '01', '函館': '02', '福島': '03', '新潟': '04', '東京': '05',
+    '中山': '06', '中京': '07', '京都': '08', '阪神': '09', '小倉': '10'
+}
+
 ADAPTIVE_PARAMS = {
-    '東京': {'weight': 480, 'pos': 1},
-    '新潟': {'weight': 480, 'pos': 1},
-    '中京': {'weight': 480, 'pos': 1},
-    '中山': {'weight': 490, 'pos': 2},
-    '阪神': {'weight': 490, 'pos': 2},
-    '小倉': {'weight': 470, 'pos': 3},
-    '福島': {'weight': 470, 'pos': 3},
-    '函館': {'weight': 470, 'pos': 3},
-    '札幌': {'weight': 470, 'pos': 3},
-    '京都': {'weight': 470, 'pos': 3},
+    '東京': {'weight': 480, 'pos': 1}, '新潟': {'weight': 480, 'pos': 1},
+    '中京': {'weight': 480, 'pos': 1}, '中山': {'weight': 490, 'pos': 2},
+    '阪神': {'weight': 490, 'pos': 2}, '小倉': {'weight': 470, 'pos': 3},
+    '福島': {'weight': 470, 'pos': 3}, '函館': {'weight': 470, 'pos': 3},
+    '札幌': {'weight': 470, 'pos': 3}, '京都': {'weight': 470, 'pos': 3},
 }
 
 def get_driver():
@@ -25,31 +26,28 @@ def get_driver():
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    driver = webdriver.Chrome(options=options)
-    return driver
+    return webdriver.Chrome(options=options)
 
 def scan_race(driver, race_id, venue_name):
+    """判定ロジック（汚れ馬・馬体重）は維持"""
     url = f"https://race.netkeiba.com/race/shutuba_past.html?race_id={race_id}"
     driver.get(url)
-    time.sleep(3) # 読み込み待ち
+    time.sleep(1) # 効率化のため少し短縮
     
-    all_text = driver.find_element(By.TAG_NAME, "body").text
-    lines = all_text.splitlines()
+    try:
+        all_text = driver.find_element(By.TAG_NAME, "body").text
+        lines = all_text.splitlines()
+    except:
+        return []
     
     params = ADAPTIVE_PARAMS.get(venue_name, {'weight': 470, 'pos': 3})
     found_horses = []
 
-    # ダンプ解析に基づいたスキャン 
     for i in range(len(lines)):
         line = lines[i].strip()
-        
-        # 1. 「枠 馬番」のパターンを発見 (例: "1 1")
         if re.match(r'^\d+\s+\d+$', line):
             try:
-                # 2. 馬名の特定 (馬番の2〜3行下)
                 horse_name = lines[i+2].strip()
-                
-                # 3. 馬体重の特定 (馬名の後に出現する "466kg(-4)" 形式)
                 current_weight = 0
                 for j in range(i+1, i+15):
                     w_match = re.search(r'(\d{3})kg', lines[j])
@@ -57,53 +55,79 @@ def scan_race(driver, race_id, venue_name):
                         current_weight = int(w_match.group(1))
                         break
                 
-                # 4. 前走・前々走の汚れチェック (日付行 "2025.11.29" を起点に探索) 
                 ranks = []
-                for k in range(i+1, i+100): # 次の馬番が出るまで探索
+                for k in range(i+1, i+100):
+                    if k >= len(lines): break
                     if re.match(r'^\d+\s+\d+$', lines[k].strip()) and k > i: break
-                    
-                    if re.match(r'^\d{4}\.\d{2}\.\d{2}', lines[k]): # 日付発見
+                    if re.match(r'^\d{4}\.\d{2}\.\d{2}', lines[k]):
                         rank_val = lines[k+1].strip()
                         if rank_val.isdigit():
                             ranks.append(int(rank_val))
                 
-                # --- 判定セクション（シミュレーション条件に完全準拠） ---
-                # 条件A: 汚れ（前走or前々走が10着以下）
+                # --- 判定ロジック（変更なし） ---
                 dirt_flag = any(r >= 10 for r in ranks[:2])
-                
-                # 条件B: 馬体重（会場別しきい値）
                 weight_flag = current_weight >= params['weight']
                 
                 if dirt_flag and weight_flag:
                     found_horses.append({
-                        'レース': f"{venue_name}{race_id[-2:]}R",
+                        'R': f"{race_id[-2:]}R",
+                        '会場': venue_name,
                         '馬名': horse_name,
-                        '馬体重': f"{current_weight}kg",
-                        '前走着順': ranks[0] if ranks else "不明",
-                        '前々走': ranks[1] if len(ranks) > 1 else "-"
+                        '体重': f"{current_weight}kg",
+                        '前走': ranks[0] if ranks else "-",
+                        '前々': ranks[1] if len(ranks) > 1 else "-"
                     })
             except Exception:
                 continue
-                
     return found_horses
 
-# --- Streamlit UI ---
-st.title("🏇 シミュレーション準拠・お宝馬スキャナー")
+# --- UI部 ---
+st.set_page_config(page_title="お宝馬一括スキャナー", layout="wide")
+st.title("🏇 2026年度版 全レース一括スキャナー")
 
-# 開催場所とレース番号を指定（実際はスケジュール読み込みと連動可能）
-venue = st.selectbox("会場", list(ADAPTIVE_PARAMS.keys()))
-race_num = st.selectbox("レース番号", [str(i).zfill(2) for i in range(1, 13)])
-target_id = st.text_input("レースID (例: 202605010302)", value=f"2026050103{race_num}")
+# CSV読み込み
+try:
+    df_schedule = pd.read_csv('jra_schedule_2026.csv')
+    # 日付選択
+    available_dates = df_schedule['日付'].unique()
+    target_date = st.selectbox("スキャンする日を選択", available_dates)
 
-if st.button("スキャン実行"):
-    with st.spinner('データを解析中...'):
+    if st.button("全レーススキャン開始"):
+        # 選択された日の開催データを抽出
+        today_venues = df_schedule[df_schedule['日付'] == target_date]
+        
+        results = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
         driver = get_driver()
         try:
-            hits = scan_race(driver, target_id, venue)
-            if hits:
-                st.success(f"🎯 条件合致馬が {len(hits)} 頭見つかりました！")
-                st.table(pd.DataFrame(hits))
+            total_venues = len(today_venues)
+            for idx, row in today_venues.iterrows():
+                v_name = row['会場名']
+                v_code = VENUE_MAP.get(v_name, '01')
+                # レースIDの組み立て (年 + 場所 + 回 + 日次)
+                # 例: 2026 + 05 + 01 + 03 + 01(R)
+                base_id = f"2026{v_code}{str(row['回']).zfill(2)}{str(row['日次']).zfill(2)}"
+                
+                for r in range(1, 13):
+                    r_str = str(r).zfill(2)
+                    race_id = f"{base_id}{r_str}"
+                    status_text.text(f"スキャン中: {v_name} {r}R...")
+                    
+                    hits = scan_race(driver, race_id, v_name)
+                    results.extend(hits)
+                
+                progress_bar.progress((idx + 1) / total_venues)
+
+            status_text.text("スキャン完了！")
+            if results:
+                st.success(f"🎯 合計 {len(results)} 頭のお宝候補が見つかりました")
+                st.table(pd.DataFrame(results))
             else:
                 st.info("条件に合う馬は見つかりませんでした。")
         finally:
             driver.quit()
+
+except FileNotFoundError:
+    st.error("CSVファイル (jra_schedule_2026.csv) が見つかりません。")
